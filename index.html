@@ -1,272 +1,491 @@
 <!doctype html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Venice API tester</title>
-<style>
-  :root {
-    --bg: #f6f5f2; --panel: #ffffff; --ink: #1c1d1f; --muted: #6b6f76;
-    --line: #d9d8d3; --accent: #1f4e79; --accent-ink: #ffffff;
-    --user: #e8eef5; --err: #a3262a;
-    color-scheme: light;
-  }
-  @media (prefers-color-scheme: dark) {
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Venice API tester</title>
+  <style>
     :root {
-      --bg: #17181a; --panel: #212326; --ink: #e9e8e4; --muted: #9a9ea5;
-      --line: #36383c; --accent: #7fb0e0; --accent-ink: #11151a;
-      --user: #26313d; --err: #f08a8d;
-      color-scheme: dark;
+      --bg: #f6f5f2;
+      --panel: #ffffff;
+      --ink: #1c1d1f;
+      --muted: #6b6f76;
+      --line: #d9d8d3;
+      --accent: #1f4e79;
+      --accent-ink: #ffffff;
+      --user: #e8eef5;
+      --err: #a3262a;
+      color-scheme: light;
     }
-  }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
-  body {
-    background: var(--bg); color: var(--ink);
-    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    display: flex; flex-direction: column;
-  }
-  header { padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
-  header h1 { margin: 0; font-size: 16px; font-weight: 600; }
-  details { margin-top: 8px; }
-  summary { cursor: pointer; color: var(--muted); }
-  .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-top: 10px; }
-  label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--muted); }
-  label.wide { grid-column: 1 / -1; }
-  input, textarea, select, button {
-    font: inherit; color: var(--ink); background: var(--bg);
-    border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px;
-  }
-  textarea { resize: vertical; }
-  .check { flex-direction: row; align-items: center; gap: 6px; }
-  .check input { width: auto; }
-  button { cursor: pointer; }
-  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-  button:disabled { opacity: .5; cursor: default; }
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .row { display: flex; gap: 8px; align-items: end; }
-  .row > label { flex: 1; }
-  #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-  .msg { max-width: 760px; width: 100%; margin: 0 auto; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); white-space: pre-wrap; overflow-wrap: anywhere; }
-  .msg.user { background: var(--user); }
-  .msg.error { color: var(--err); border-color: var(--err); }
-  .meta { display: block; margin-top: 6px; font-size: 12px; color: var(--muted); white-space: normal; }
-  .empty { margin: auto; color: var(--muted); text-align: center; max-width: 360px; }
-  form { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--panel); }
-  form textarea { flex: 1; min-height: 44px; max-height: 160px; resize: none; }
-</style>
-</head>
-<body>
-<header>
-  <h1>Venice API tester</h1>
-  <details open>
-    <summary>Settings</summary>
-    <div class="grid">
-      <label>API key
-        <input id="key" type="password" autocomplete="off" placeholder="Venice API key">
-      </label>
-      <label class="check"><input id="remember" type="checkbox"> Remember key in this browser (localStorage)</label>
-      <label>Base URL
-        <input id="base" value="https://api.venice.ai/api/v1">
-      </label>
-      <div class="row">
-        <label>Model
-          <input id="model" list="models" value="venice-uncensored">
-          <datalist id="models"></datalist>
-        </label>
-        <button type="button" id="load">Load models</button>
-      </div>
-      <label class="wide">System prompt (optional)
-        <textarea id="system" rows="2"></textarea>
-      </label>
-      <label class="wide">Extra request body (JSON, merged into the request)
-        <textarea id="extra" rows="3" spellcheck="false">{}</textarea>
-      </label>
-    </div>
-  </details>
-</header>
 
-<div id="log" aria-live="polite">
-  <div class="empty" id="empty">Enter your API key, pick a model, and send a message. Requests go directly from this browser to the API.</div>
-</div>
-
-<form id="form">
-  <textarea id="input" placeholder="Message" rows="1"></textarea>
-  <button class="primary" id="send" type="submit">Send</button>
-  <button type="button" id="stop" hidden>Stop</button>
-  <button type="button" id="clear">Clear</button>
-</form>
-
-<script>
-const $ = id => document.getElementById(id);
-const log = $('log'), input = $('input');
-let history = [];
-let controller = null;
-
-// --- settings persistence ---
-const LS = {
-  get(k) { try { return localStorage.getItem(k) } catch { return null } },
-  set(k, v) { try { localStorage.setItem(k, v) } catch {} },
-  del(k) { try { localStorage.removeItem(k) } catch {} },
-};
-for (const id of ['base', 'model', 'system', 'extra']) {
-  const v = LS.get('venice.' + id);
-  if (v !== null) $(id).value = v;
-  $(id).addEventListener('input', () => LS.set('venice.' + id, $(id).value));
-}
-const savedKey = LS.get('venice.key');
-if (savedKey) { $('key').value = savedKey; $('remember').checked = true; }
-function persistKey() {
-  if ($('remember').checked) LS.set('venice.key', $('key').value);
-  else LS.del('venice.key');
-}
-$('key').addEventListener('input', persistKey);
-$('remember').addEventListener('change', persistKey);
-
-// --- helpers ---
-const baseUrl = () => $('base').value.trim().replace(/\/+$/, '');
-
-function addMsg(role, text, cls = '') {
-  $('empty')?.remove();
-  const el = document.createElement('div');
-  el.className = 'msg ' + role + ' ' + cls;
-  el.textContent = text;
-  log.appendChild(el);
-  log.scrollTop = log.scrollHeight;
-  return el;
-}
-function addMeta(el, text) {
-  const m = document.createElement('span');
-  m.className = 'meta';
-  m.textContent = text;
-  el.appendChild(m);
-}
-function setBusy(b) {
-  $('send').disabled = b;
-  $('stop').hidden = !b;
-}
-
-// --- load models ---
-$('load').addEventListener('click', async () => {
-  const btn = $('load');
-  btn.disabled = true;
-  try {
-    const res = await fetch(baseUrl() + '/models', {
-      headers: { Authorization: 'Bearer ' + $('key').value.trim() },
-    });
-    if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + (await res.text()).slice(0, 300));
-    const json = await res.json();
-    const list = (json.data || []).filter(m => !m.type || m.type === 'text');
-    $('models').replaceChildren(...list.map(m => {
-      const o = document.createElement('option'); o.value = m.id; return o;
-    }));
-    btn.textContent = 'Loaded ' + list.length;
-  } catch (e) {
-    addMsg('assistant', 'Model list failed: ' + e.message, 'error');
-    btn.textContent = 'Load models';
-  } finally { btn.disabled = false; }
-});
-
-// --- chat ---
-async function send(text) {
-  let extra = {};
-  try { extra = JSON.parse($('extra').value || '{}'); }
-  catch (e) { addMsg('assistant', 'Extra request body is not valid JSON: ' + e.message, 'error'); return; }
-
-  history.push({ role: 'user', content: text });
-  addMsg('user', text);
-
-  const messages = [];
-  const sys = $('system').value.trim();
-  if (sys) messages.push({ role: 'system', content: sys });
-  messages.push(...history);
-
-  const body = { ...extra, model: $('model').value.trim(), messages, stream: true };
-  const out = addMsg('assistant', '');
-  let acc = '', usage = null, modelId = null;
-  controller = new AbortController();
-  setBusy(true);
-  const t0 = performance.now();
-
-  try {
-    const res = await fetch(baseUrl() + '/chat/completions', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Bearer ' + $('key').value.trim(),
-      },
-      body: JSON.stringify(body),
-    });
-    modelId = res.headers.get('x-venice-model-id');
-    if (!res.ok) throw new Error('HTTP ' + res.status + '\n' + (await res.text()).slice(0, 1000));
-
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i).trim();
-        buf = buf.slice(i + 1);
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (data === '[DONE]') continue;
-        let chunk;
-        try { chunk = JSON.parse(data); } catch { continue; }
-        if (chunk.usage) usage = chunk.usage;
-        const delta = chunk.choices?.[0]?.delta;
-        if (delta?.content) {
-          acc += delta.content;
-          out.firstChild
-            ? (out.firstChild.nodeValue = acc)
-            : out.appendChild(document.createTextNode(acc));
-          log.scrollTop = log.scrollHeight;
-        }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #17181a;
+        --panel: #212326;
+        --ink: #e9e8e4;
+        --muted: #9a9ea5;
+        --line: #36383c;
+        --accent: #7fb0e0;
+        --accent-ink: #11151a;
+        --user: #26313d;
+        --err: #f08a8d;
+        color-scheme: dark;
       }
     }
-    history.push({ role: 'assistant', content: acc });
-    const secs = ((performance.now() - t0) / 1000).toFixed(1);
-    const bits = [secs + 's'];
-    if (modelId) bits.push('model ' + modelId);
-    if (usage) bits.push(usage.prompt_tokens + ' in / ' + usage.completion_tokens + ' out');
-    addMeta(out, bits.join(' | '));
-  } catch (e) {
-    if (e.name === 'AbortError') {
-      if (acc) history.push({ role: 'assistant', content: acc });
-      addMeta(out, 'stopped');
-    } else {
-      history.pop(); // drop the unanswered user turn
-      out.classList.add('error');
-      out.textContent = e.message +
-        (e instanceof TypeError ? '\n\nNetwork or CORS failure. Check the browser console.' : '');
-    }
-  } finally {
-    controller = null;
-    setBusy(false);
-    input.focus();
-  }
-}
 
-$('form').addEventListener('submit', e => {
-  e.preventDefault();
-  const text = input.value.trim();
-  if (!text || controller) return;
-  input.value = '';
-  send(text);
-});
-input.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('form').requestSubmit(); }
-});
-$('stop').addEventListener('click', () => controller?.abort());
-$('clear').addEventListener('click', () => {
-  controller?.abort();
-  history = [];
-  log.replaceChildren();
-});
-</script>
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    details {
+      margin-top: 8px;
+    }
+
+    summary {
+      cursor: pointer;
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      margin-top: 10px;
+    }
+
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    label.wide {
+      grid-column: 1 / -1;
+    }
+
+    input,
+    textarea,
+    select,
+    button {
+      font: inherit;
+      color: var(--ink);
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 7px 9px;
+    }
+
+    textarea {
+      resize: vertical;
+    }
+
+    .check {
+      flex-direction: row;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .check input {
+      width: auto;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: var(--accent-ink);
+      border-color: var(--accent);
+    }
+
+    button:disabled {
+      opacity: .5;
+      cursor: default;
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: end;
+    }
+
+    .row>label {
+      flex: 1;
+    }
+
+    #log {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .msg {
+      max-width: 760px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .msg.user {
+      background: var(--user);
+    }
+
+    .msg.error {
+      color: var(--err);
+      border-color: var(--err);
+    }
+
+    .meta {
+      display: block;
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--muted);
+      white-space: normal;
+    }
+
+    .empty {
+      margin: auto;
+      color: var(--muted);
+      text-align: center;
+      max-width: 360px;
+    }
+
+    form {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
+      border-top: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    form textarea {
+      flex: 1;
+      min-height: 44px;
+      max-height: 160px;
+      resize: none;
+    }
+
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>Venice API tester</h1>
+    <details open>
+      <summary>Settings</summary>
+      <div class="grid">
+        <label>API key
+          <input id="key" type="password" autocomplete="off" placeholder="Venice API key">
+        </label>
+        <label class="check"><input id="remember" type="checkbox"> Remember key in this browser (localStorage)</label>
+        <label>Base URL
+          <input id="base" value="https://api.venice.ai/api/v1">
+        </label>
+        <div class="row">
+          <label>Model
+            <input id="model" list="models" value="venice-uncensored">
+            <datalist id="models"></datalist>
+          </label>
+          <button type="button" id="load">Load models</button>
+        </div>
+        <label class="wide">System prompt (optional)
+          <textarea id="system" rows="2"></textarea>
+        </label>
+        <label class="wide">Extra request body (JSON, merged into the request)
+          <textarea id="extra" rows="3" spellcheck="false">{}</textarea>
+        </label>
+      </div>
+    </details>
+  </header>
+
+  <div id="log" aria-live="polite">
+    <div class="empty" id="empty">Enter your API key, pick a model, and send a message. Requests go directly from this browser to the API.</div>
+  </div>
+
+  <form id="form">
+    <textarea id="input" placeholder="Message" rows="1"></textarea>
+    <button class="primary" id="send" type="submit">Send</button>
+    <button type="button" id="stop" hidden>Stop</button>
+    <button type="button" id="clear">Clear</button>
+  </form>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const log = $('log'),
+      input = $('input');
+    let history = [];
+    let controller = null;
+
+    // --- settings persistence ---
+    const LS = {
+      get(k) {
+        try {
+          return localStorage.getItem(k)
+        } catch {
+          return null
+        }
+      },
+      set(k, v) {
+        try {
+          localStorage.setItem(k, v)
+        } catch {}
+      },
+      del(k) {
+        try {
+          localStorage.removeItem(k)
+        } catch {}
+      },
+    };
+    for (const id of ['base', 'model', 'system', 'extra']) {
+      const v = LS.get('venice.' + id);
+      if (v !== null) $(id).value = v;
+      $(id).addEventListener('input', () => LS.set('venice.' + id, $(id).value));
+    }
+    const savedKey = LS.get('venice.key');
+    if (savedKey) {
+      $('key').value = savedKey;
+      $('remember').checked = true;
+    }
+
+    function persistKey() {
+      if ($('remember').checked) LS.set('venice.key', $('key').value);
+      else LS.del('venice.key');
+    }
+    $('key').addEventListener('input', persistKey);
+    $('remember').addEventListener('change', persistKey);
+
+    // --- helpers ---
+    const baseUrl = () => $('base').value.trim().replace(/\/+$/, '');
+
+    function addMsg(role, text, cls = '') {
+      $('empty')?.remove();
+      const el = document.createElement('div');
+      el.className = 'msg ' + role + ' ' + cls;
+      el.textContent = text;
+      log.appendChild(el);
+      log.scrollTop = log.scrollHeight;
+      return el;
+    }
+
+    function addMeta(el, text) {
+      const m = document.createElement('span');
+      m.className = 'meta';
+      m.textContent = text;
+      el.appendChild(m);
+    }
+
+    function setBusy(b) {
+      $('send').disabled = b;
+      $('stop').hidden = !b;
+    }
+
+    // --- load models ---
+    $('load').addEventListener('click', async () => {
+      const btn = $('load');
+      btn.disabled = true;
+      try {
+        const res = await fetch(baseUrl() + '/models', {
+          headers: {
+            Authorization: 'Bearer ' + $('key').value.trim()
+          },
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + (await res.text()).slice(0, 300));
+        const json = await res.json();
+        const list = (json.data || []).filter(m => !m.type || m.type === 'text');
+        $('models').replaceChildren(...list.map(m => {
+          const o = document.createElement('option');
+          o.value = m.id;
+          return o;
+        }));
+        btn.textContent = 'Loaded ' + list.length;
+      } catch (e) {
+        addMsg('assistant', 'Model list failed: ' + e.message, 'error');
+        btn.textContent = 'Load models';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    // --- chat ---
+    async function send(text) {
+      let extra = {};
+      try {
+        extra = JSON.parse($('extra').value || '{}');
+      } catch (e) {
+        addMsg('assistant', 'Extra request body is not valid JSON: ' + e.message, 'error');
+        return;
+      }
+
+      history.push({
+        role: 'user',
+        content: text
+      });
+      addMsg('user', text);
+
+      const messages = [];
+      const sys = $('system').value.trim();
+      if (sys) messages.push({
+        role: 'system',
+        content: sys
+      });
+      messages.push(...history);
+
+      const body = {
+        ...extra,
+        model: $('model').value.trim(),
+        messages,
+        stream: true
+      };
+      const out = addMsg('assistant', '');
+      let acc = '',
+        usage = null,
+        modelId = null;
+      controller = new AbortController();
+      setBusy(true);
+      const t0 = performance.now();
+
+      try {
+        const res = await fetch(baseUrl() + '/chat/completions', {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + $('key').value.trim(),
+          },
+          body: JSON.stringify(body),
+        });
+        modelId = res.headers.get('x-venice-model-id');
+        if (!res.ok) throw new Error('HTTP ' + res.status + '\n' + (await res.text()).slice(0, 1000));
+
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const {
+            value,
+            done
+          } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, {
+            stream: true
+          });
+          let i;
+          while ((i = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, i).trim();
+            buf = buf.slice(i + 1);
+            if (!line.startsWith('data:')) continue;
+            const data = line.slice(5).trim();
+            if (data === '[DONE]') continue;
+            let chunk;
+            try {
+              chunk = JSON.parse(data);
+            } catch {
+              continue;
+            }
+            if (chunk.usage) usage = chunk.usage;
+            const delta = chunk.choices?.[0]?.delta;
+            if (delta?.content) {
+              acc += delta.content;
+              out.firstChild ?
+                (out.firstChild.nodeValue = acc) :
+                out.appendChild(document.createTextNode(acc));
+              log.scrollTop = log.scrollHeight;
+            }
+          }
+        }
+        history.push({
+          role: 'assistant',
+          content: acc
+        });
+        const secs = ((performance.now() - t0) / 1000).toFixed(1);
+        const bits = [secs + 's'];
+        if (modelId) bits.push('model ' + modelId);
+        if (usage) bits.push(usage.prompt_tokens + ' in / ' + usage.completion_tokens + ' out');
+        addMeta(out, bits.join(' | '));
+      } catch (e) {
+        if (e.name === 'AbortError') {
+          if (acc) history.push({
+            role: 'assistant',
+            content: acc
+          });
+          addMeta(out, 'stopped');
+        } else {
+          history.pop(); // drop the unanswered user turn
+          out.classList.add('error');
+          out.textContent = e.message +
+            (e instanceof TypeError ? '\n\nNetwork or CORS failure. Check the browser console.' : '');
+        }
+      } finally {
+        controller = null;
+        setBusy(false);
+        input.focus();
+      }
+    }
+
+    $('form').addEventListener('submit', e => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text || controller) return;
+      input.value = '';
+      send(text);
+    });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        $('form').requestSubmit();
+      }
+    });
+    $('stop').addEventListener('click', () => controller?.abort());
+    $('clear').addEventListener('click', () => {
+      controller?.abort();
+      history = [];
+      log.replaceChildren();
+    });
+
+  </script>
 </body>
+
 </html>
